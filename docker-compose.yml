@@ -1,0 +1,23 @@
+# Both apps. Edit the two paths marked CHANGE to the server folders that hold the slides / QuPath CSVs.
+services:
+  mihc:
+    build: ./mihc
+    image: farcast/mihc-easy:1.0
+    ports: ["8502:8501"]
+    volumes:
+      - /srv/mihc-data:/data:ro          # CHANGE: folder with one sub-folder per sample (QuPath CSVs)
+    restart: unless-stopped
+
+  coreg:
+    build: ./coreg
+    image: farcast/coreg-easy:1.0
+    ports: ["8501:8501"]
+    shm_size: "2gb"
+    volumes:
+      - /srv/slides:/data                # CHANGE: folder with the .czi / .tif slides (results are written next to them)
+      - coreg-runs:/runs                 # job progress; keeps "Resume" working after a restart
+    restart: unless-stopped
+    # deploy: { resources: { limits: { memory: 64g } } }   # optional; one job needs ~24 GB
+
+volumes:
+  coreg-runs:
