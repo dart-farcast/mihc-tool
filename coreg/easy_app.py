@@ -13,6 +13,7 @@ import uuid
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import coreg_core as C
 
@@ -117,6 +118,120 @@ def stop_run(rd):
 
 
 UPLOADS = os.environ.get("COREG_UPLOAD_DIR") or os.path.join(tempfile.gettempdir(), "coreg_uploads")
+CHUNKED = os.environ.get("COREG_CHUNKED_UPLOAD") == "1"
+
+
+def sync_chunked_upload(key):
+    """Fill the path box from files uploaded via the chunked upload server."""
+    upid = st.session_state.setdefault("upid", uuid.uuid4().hex[:8])
+    dest = os.path.join(UPLOADS, upid, key)
+    if not os.path.isdir(dest):
+        return
+    files = sorted(f for f in os.listdir(dest) if os.path.isfile(os.path.join(dest, f)) and not f.endswith(".part"))
+    if len(files) == 1:
+        st.session_state[key] = os.path.join(dest, files[0])
+    elif len(files) > 1:
+        st.session_state[key] = dest
+
+
+def _chunked_uploader_widget(key, btn_label, exts):
+    upid = st.session_state.setdefault("upid", uuid.uuid4().hex[:8])
+    accept = ",".join(exts)
+    html = f"""
+    <div style="font-family:sans-serif;font-size:13px;padding:6px 10px;border:1px solid #d0d7de;border-radius:8px;background:#f8fafc;">
+      <label style="font-weight:600;display:block;margin-bottom:6px;">Upload from your PC (supports 5 GB+ files)</label>
+      <input id="f_{key}" type="file" multiple accept="{accept}" style="width:100%;margin-bottom:6px;" />
+      <div id="pwrap_{key}" style="display:none;margin-top:4px;">
+        <div style="background:#e2e8f0;border-radius:4px;height:8px;overflow:hidden;">
+          <div id="pbar_{key}" style="background:#2563eb;height:100%;width:0%;transition:width 0.15s;"></div>
+        </div>
+        <div id="pmsg_{key}" style="margin-top:4px;color:#334155;font-size:12px;"></div>
+      </div>
+    </div>
+    <script>
+    (function() {{
+      const input = document.getElementById("f_{key}");
+      const wrap = document.getElementById("pwrap_{key}");
+      const bar = document.getElementById("pbar_{key}");
+      const msg = document.getElementById("pmsg_{key}");
+      const CHUNK = 20 * 1024 * 1024;
+      const UPID = {json.dumps(upid)};
+      const SLOT = {json.dumps(key)};
+      const BTN = {json.dumps(btn_label)};
+
+      function fmtBytes(b) {{
+        if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+        if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+        return Math.round(b / 1e3) + " KB";
+      }}
+
+      async function sendChunk(url, headers, blob) {{
+        for (let attempt = 0; attempt < 4; attempt++) {{
+          try {{
+            const r = await fetch(url, {{ method: "POST", headers, body: blob }});
+            if (r.ok) return await r.json();
+          }} catch (e) {{}}
+          await new Promise(res => setTimeout(res, 1000 * (attempt + 1)));
+        }}
+        throw new Error("Chunk upload failed after retries");
+      }}
+
+      input.addEventListener("change", async () => {{
+        const files = Array.from(input.files || []);
+        if (!files.length) return;
+        wrap.style.display = "block";
+        input.disabled = true;
+        try {{
+          msg.textContent = "Preparing upload...";
+          await fetch(`/upload/clear?upload_id=${{encodeURIComponent(UPID)}}&slot=${{encodeURIComponent(SLOT)}}`, {{ method: "POST" }});
+          const totalAll = files.reduce((a, f) => a + f.size, 0);
+          let sentAll = 0;
+          const t0 = Date.now();
+          for (let fi = 0; fi < files.length; fi++) {{
+            const file = files[fi];
+            const total = file.size;
+            let offset = 0;
+            while (offset < total || total === 0) {{
+              const end = Math.min(offset + CHUNK, total);
+              const blob = file.slice(offset, end);
+              const done = end >= total ? "1" : "0";
+              await sendChunk("/upload/chunk", {{
+                "X-Upload-Id": UPID,
+                "X-Slot": SLOT,
+                "X-Filename": file.name,
+                "X-Offset": String(offset),
+                "X-Total-Size": String(total),
+                "X-Done": done
+              }}, blob);
+              sentAll += (end - offset);
+              offset = end;
+              const pct = totalAll > 0 ? Math.min(100, Math.round(sentAll * 100 / totalAll)) : 100;
+              const elapsed = Math.max(0.1, (Date.now() - t0) / 1000);
+              const mbps = (sentAll / 1e6 / elapsed).toFixed(1);
+              bar.style.width = pct + "%";
+              msg.textContent = `(${{fi + 1}}/${{files.length}}) ${{file.name}}: ${{pct}}% · ${{fmtBytes(sentAll)}} / ${{fmtBytes(totalAll)}} · ${{mbps}} MB/s`;
+              if (total === 0) break;
+            }}
+          }}
+          bar.style.background = "#16a34a";
+          msg.textContent = `Uploaded ${{files.length}} file(s) (${{fmtBytes(totalAll)}}). Loading into app...`;
+          for (const b of window.parent.document.querySelectorAll("button")) {{
+            if (b.innerText && b.innerText.includes(BTN)) {{
+              b.click();
+              break;
+            }}
+          }}
+        }} catch (err) {{
+          bar.style.background = "#dc2626";
+          msg.textContent = "Upload error: " + err.message;
+        }} finally {{
+          input.disabled = false;
+        }}
+      }});
+    }})();
+    </script>
+    """
+    components.html(html, height=96)
 
 
 def save_upload(key):
@@ -145,9 +260,15 @@ def path_input(label, key, folder_only=False):
     else:                                             # website: path box on the left, upload from the PC on the right
         c = st.columns([5, 6], vertical_alignment="top")
         c[0].text_input(label, key=key, help="Filled in by itself after an upload. You can also type a path on the server.")
-        c[1].file_uploader("Upload from your PC", accept_multiple_files=True, key=f"up_{key}", on_change=save_upload, args=(key,),
-                           type=[e.lstrip(".") for e in C.SLIDE_EXTS],
-                           help="Opens the Windows window: pick one slide, or several to pair by explant code. Large slides take a while.")
+        if CHUNKED:
+            with c[1]:
+                btn_label = f"Load uploaded ({key})"
+                _chunked_uploader_widget(key, btn_label, C.SLIDE_EXTS)
+                st.button(btn_label, key=f"sync_{key}", on_click=sync_chunked_upload, args=(key,))
+        else:
+            c[1].file_uploader("Upload from your PC", accept_multiple_files=True, key=f"up_{key}", on_change=save_upload, args=(key,),
+                               type=[e.lstrip(".") for e in C.SLIDE_EXTS],
+                               help="Opens the Windows window: pick one slide, or several to pair by explant code. Large slides take a while.")
 
 
 def tail(path, n=60, size=200_000):
