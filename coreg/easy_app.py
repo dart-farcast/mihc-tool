@@ -422,7 +422,7 @@ def progress():
                   help="Starts the failed / cancelled jobs again. Phases that already finished are not repeated.")
     if not LOCAL:                                            # website: the results are on the server, so offer them for download
         for j in stt["jobs"]:
-            f = os.path.join(j["output"] or "", f"{j['name']}_merged_avg.ome.tiff")        # the final image of the job (output = its VALIS folder)
+            f = j["output"] or ""                                  # output = the final merged image itself (job_dirs()[2])
             if j["status"] == "done" and os.path.isfile(f):
                 with open(f, "rb") as fh:
                     st.download_button(f"⬇ Download {j['name']} ({os.path.getsize(f) / 1e9:.1f} GB)", fh,
