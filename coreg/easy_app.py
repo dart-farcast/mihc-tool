@@ -135,20 +135,20 @@ def save_upload(key):
 
 
 def path_input(label, key, folder_only=False):
-    c = st.columns([8, 1.2, 1.2], vertical_alignment="bottom")
-    c[0].text_input(label, key=key)
     if LOCAL:                                         # on the PC that runs the app: the normal Windows dialog
+        c = st.columns([8, 1.2, 1.2], vertical_alignment="bottom")
+        c[0].text_input(label, key=key)
         c[1].button("Folder", key=f"bf_{key}", on_click=browse, args=(key, "dir", label))
         if not folder_only:
             c[2].button("File", key=f"bi_{key}", on_click=browse, args=(key, "file", label))
-    else:                                             # server / Docker: browse the server's folders inside the page
-        c[1].button("Folder", key=f"bf_{key}", on_click=server_picker.pick, args=(key, "dir", label))
-        if not folder_only:
-            c[2].button("File", key=f"bi_{key}", on_click=server_picker.pick, args=(key, "file", label, C.SLIDE_EXTS))
-    if not LOCAL and not folder_only:                 # website: upload the slides from the user's PC (Explorer window)
-        st.file_uploader(f"...or upload from your PC: {label}", accept_multiple_files=True, key=f"up_{key}",
-                         type=[e.lstrip(".") for e in C.SLIDE_EXTS], on_change=save_upload, args=(key,),
-                         help="Pick the slide file(s) in the Windows window. Large slides take a while to upload.")
+    elif folder_only:                                 # website: results folder on the server
+        st.text_input(label, key=key)
+    else:                                             # website: path box on the left, upload from the PC on the right
+        c = st.columns([5, 6], vertical_alignment="top")
+        c[0].text_input(label, key=key, help="Filled in by itself after an upload. You can also type a path on the server.")
+        c[1].file_uploader("Upload from your PC", accept_multiple_files=True, key=f"up_{key}", on_change=save_upload, args=(key,),
+                           type=[e.lstrip(".") for e in C.SLIDE_EXTS],
+                           help="Opens the Windows window: pick one slide, or several to pair by explant code. Large slides take a while.")
 
 
 def tail(path, n=60, size=200_000):
