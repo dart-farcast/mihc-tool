@@ -3,6 +3,7 @@ Launch with `Launch Easy mIHC App.bat`.  Engine: mihc_engine.py"""
 import io, os, shutil, tempfile, zipfile
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import mihc_engine as E
 import server_picker
 
@@ -87,7 +88,12 @@ def analyze():
                 st.error("That folder does not exist.")
             out_default = os.path.join(folder, "Results")
     else:
-        ups = st.file_uploader("Measurement CSVs (one per sample) - click Browse files and select them all, or drag a folder here", type="csv", accept_multiple_files=True)
+        by_folder = st.toggle("Pick a whole folder (Browse opens the folder window; all its CSVs are uploaded)", value=True)
+        # Streamlit's uploader only picks files; this turns its Browse button into a folder chooser (same page, so the script may reach it)
+        components.html("<script>const f=()=>{for(const i of parent.document.querySelectorAll('input[type=file]'))"
+                        "{i.webkitdirectory=%s;}};f();new MutationObserver(f).observe(parent.document.body,{childList:true,subtree:true});</script>"
+                        % ("true" if by_folder else "false"), height=0)
+        ups = st.file_uploader("Measurement CSVs (one per sample) - Browse opens a window on your computer", type="csv", accept_multiple_files=True)
         tmpdir = st.session_state.setdefault("tmpdir", tempfile.mkdtemp())
         for u in ups or []:
             p = os.path.join(tmpdir, u.name)
