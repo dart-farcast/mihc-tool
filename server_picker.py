@@ -4,6 +4,8 @@ Use: st.button("Browse", on_click=server_picker.pick, args=(target_key, "dir" | 
 st.session_state[target_key] (a text_input with that key is filled in, a plain key is just set)."""
 import os
 import string
+import subprocess
+import sys
 
 import streamlit as st
 
@@ -64,5 +66,29 @@ def _body(key, kind, exts):
             st.rerun()
 
 
+def is_local():
+    """True when the browser is on the same PC that runs the app (so a normal desktop dialog is possible)."""
+    try:
+        host = st.context.headers.get("Host", "").split(":")[0]
+    except Exception:
+        host = "localhost"
+    return host in ("localhost", "127.0.0.1", "[::1]") and not os.environ.get("COREG_NO_BROWSE") and os.name == "nt"
+
+
+_TK = """import sys, tkinter as tk
+from tkinter import filedialog as fd
+r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True); r.focus_force()
+kind, title, exts = sys.argv[1], sys.argv[2], sys.argv[3:]
+ft = [('Files', ' '.join('*' + e for e in exts))] if exts else []
+p = fd.askdirectory(title=title) if kind == 'dir' else fd.askopenfilename(title=title, filetypes=ft + [('All files', '*.*')])
+print(p.replace('/', chr(92)) if p else '')
+"""
+
+
 def pick(key, kind="dir", title="Select", exts=None):
+    if is_local():                                     # normal Windows dialog
+        out = subprocess.run([sys.executable, "-c", _TK, kind, title, *(exts or [])], capture_output=True, text=True).stdout.strip()
+        if out:
+            st.session_state[key] = out
+        return
     st.dialog(title, width="large")(_body)(key, kind, tuple(exts) if exts else None)

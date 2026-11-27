@@ -68,9 +68,12 @@ def pair_editor(key, left, right, cols):
 def analyze():
     st.caption("Counts per zone · Log2FC · Prism export · % pairs · cell-cell distance · proximity. Five steps, top to bottom.")
     st.header("1 · Your data")
-    src = st.radio("Where are the QuPath measurement CSVs?", ["Folder (PC or server)", "Upload files"], horizontal=True)
+    local = server_picker.is_local()
+    opts = ["Folder on this PC", "Upload files"] if local else ["Files from my computer", "Folder on the server"]
+    src = st.radio("Where are the QuPath measurement CSVs?", opts, horizontal=True)
+    src = "Folder" if src in ("Folder on this PC", "Folder on the server") else "Upload"
     found, out_default = {}, ""
-    if src.startswith("Folder"):
+    if src == "Folder":
         c1, c2 = st.columns([1, 5], vertical_alignment="center")
         c1.button("Browse...", on_click=server_picker.pick, args=("folder", "dir", "Select the project folder"), key="browse_btn")
         folder = st.session_state.get("folder", "")
@@ -84,7 +87,7 @@ def analyze():
                 st.error("That folder does not exist.")
             out_default = os.path.join(folder, "Results")
     else:
-        ups = st.file_uploader("Measurement CSVs (one per sample)", type="csv", accept_multiple_files=True)
+        ups = st.file_uploader("Measurement CSVs (one per sample) - click Browse files and select them all, or drag a folder here", type="csv", accept_multiple_files=True)
         tmpdir = st.session_state.setdefault("tmpdir", tempfile.mkdtemp())
         for u in ups or []:
             p = os.path.join(tmpdir, u.name)
