@@ -119,7 +119,7 @@ def analyze():
         st.warning("Tick at least one sample.")
         return
     response = {r["Sample"]: r["Response (optional)"] for _, r in use.iterrows() if r["Response (optional)"]}
-    labels = {r["Sample"]: (r["Label"].strip() or r["Sample"]) for _, r in use.iterrows()}
+    labels = {r["Sample"]: ((r["Label"] or "").strip() or r["Sample"]) for _, r in use.iterrows()}
     first = found[use.iloc[0]["Sample"]]
 
     st.header("2 · What we found in the CSV")
@@ -164,12 +164,13 @@ def analyze():
     with st.expander("Advanced settings (the defaults are the lab standard)"):
         circ = st.slider("Minimum nucleus circularity (0 = off)", 0.0, 1.0, 0.7, 0.05)
         peri = st.number_input("Peri-tumor zone: up to X µm outside the tumour", 1.0, 500.0, 50.0) if has_sd else 50.0
-        old_way = st.checkbox("Let a cell count as its own neighbour (reproduces the old BP016/BP018/Exosome scripts)", value=False,
-                              help="Cells positive for both the source and the neighbour marker (e.g. CD8+FoxP3+) are at 0 µm from themselves. "
-                                   "The old scripts counted that; the default here does not.")
+        cohort_name = st.text_input("Name of the cohort file", "Cohort_Analysis", help="Saved as <name>.xlsx when you analyse more than one sample").strip() or "Cohort_Analysis"
+        as_zip = st.checkbox("Always download everything as one .zip", False, help="Otherwise up to 3 files get their own download button")
     if not has_sd:
         st.info("No signed distance to the tumour in this CSV: counts per marker only (no In-Tumor / Peri-Tumor / TILs zones)" + (" - distance to the tumour is still available above." if has_td else "."))
 
+    sig = repr((tab.fillna("").values.tolist(), list(map(str, markers.items())), pct_pairs, pairs, prox_pairs, thr, circ, peri, ann, d["ref"],
+                d["n_exp"], d["arm_names"], cohort_name))                 # everything the results depend on
     if st.button("Run analysis", type="primary"):
         out_dir = tempfile.mkdtemp()                     # results are only handed to the browser as downloads
         codes, arm_order = list(d["arm_names"]), list(d["arm_names"].values())
@@ -185,11 +186,11 @@ def analyze():
             df = df[df["arm"].isin(codes)].assign(arm=lambda x: x["arm"].map(d["arm_names"]))
             cls = E.marker_classes(df["Classification"].unique(), d["rename"], markers)
             counts = E.compute_counts(df, cls, peri, E.ZONES if has_sd else ["Total"])
-            inter = E.compute_interactions(df, cls, pairs, not old_way) if pairs else None
-            prox = E.compute_proximity(df, cls, prox_pairs, thr, peri, not old_way) if prox_pairs else None
+            inter = E.compute_interactions(df, cls, pairs) if pairs else None
+            prox = E.compute_proximity(df, cls, prox_pairs, thr, peri) if prox_pairs else None
             results[sid] = {"counts": counts, "inter": inter, "prox": prox}
             note = (f"circularity > {circ}; peri-tumor <= {peri} um; proximity threshold {thr} um; "
-                    f"{'cells may be their own neighbour (old scripts)' if old_way else 'cells are never their own neighbour'}; "
+                    "a cell is never its own neighbour; "
                     f"markers: {', '.join(markers)}")
             files.append(E.write_sample_workbook(os.path.join(out_dir, f"{sid}_counts.xlsx"), sid, counts, inter, arm_order,
                                                  d["ref"], d["n_exp"], note, prox))
@@ -197,16 +198,20 @@ def analyze():
             if miss:
                 st.warning(f"{sid}: no cells found for {', '.join(miss)}")
         if len(results) > 1:
-            files.append(E.write_cohort_workbook(os.path.join(out_dir, "Cohort_Analysis.xlsx"), results, arm_order, d["ref"], response, pct_pairs,
+            files.append(E.write_cohort_workbook(os.path.join(out_dir, f"{cohort_name}.xlsx"), results, arm_order, d["ref"], response, pct_pairs,
                                                 labels, {v: k for k, v in d["arm_names"].items()}))
         bar.progress(1.0, text="Done")
+        st.session_state["out_sig"] = sig
         st.session_state["out"] = [(os.path.basename(f), open(f, "rb").read()) for f in files]
         shutil.rmtree(out_dir, ignore_errors=True)
 
     out = st.session_state.get("out")
+    if out and st.session_state.get("out_sig") != sig:
+        st.warning("You changed something (labels, markers, pairs or settings) after the last run - press **Run analysis** again to get updated files.")
+        out = None
     if out:
         st.success(f"Done - {len(out)} file(s) ready.")
-        if len(out) <= 3:                                 # a few files: download each directly; many: one zip
+        if len(out) <= 3 and not as_zip:                                 # a few files: download each directly; many: one zip
             for name, data in out:
                 st.download_button(f"Download {name}", data, name, key=f"dl_{name}",
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
