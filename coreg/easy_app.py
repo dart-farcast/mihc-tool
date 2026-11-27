@@ -5,8 +5,11 @@ saves its progress, so after an error you press Resume and only the unfinished w
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import uuid
 
 import pandas as pd
 import streamlit as st
@@ -114,6 +117,23 @@ def stop_run(rd):
     open(os.path.join(rd, "stop.flag"), "w").close()
 
 
+UPLOADS = os.environ.get("COREG_UPLOAD_DIR") or os.path.join(tempfile.gettempdir(), "coreg_uploads")
+
+
+def save_upload(key):
+    """Uploaded slides go to the server's disk; the path box is then filled with that folder (several files) or file (one)."""
+    ups = st.session_state.get(f"up_{key}") or []
+    if not ups:
+        return
+    dest = os.path.join(UPLOADS, st.session_state.setdefault("upid", uuid.uuid4().hex[:8]), key)
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest)
+    for u in ups:
+        with open(os.path.join(dest, os.path.basename(u.name)), "wb") as fh:
+            shutil.copyfileobj(u, fh, 1 << 24)
+    st.session_state[key] = dest if len(ups) > 1 else os.path.join(dest, os.path.basename(ups[0].name))
+
+
 def path_input(label, key, folder_only=False):
     c = st.columns([8, 1.2, 1.2], vertical_alignment="bottom")
     c[0].text_input(label, key=key)
@@ -125,6 +145,10 @@ def path_input(label, key, folder_only=False):
         c[1].button("Folder", key=f"bf_{key}", on_click=server_picker.pick, args=(key, "dir", label))
         if not folder_only:
             c[2].button("File", key=f"bi_{key}", on_click=server_picker.pick, args=(key, "file", label, C.SLIDE_EXTS))
+    if not LOCAL and not folder_only:                 # website: upload the slides from the user's PC (Explorer window)
+        st.file_uploader(f"...or upload from your PC: {label}", accept_multiple_files=True, key=f"up_{key}",
+                         type=[e.lstrip(".") for e in C.SLIDE_EXTS], on_change=save_upload, args=(key,),
+                         help="Pick the slide file(s) in the Windows window. Large slides take a while to upload.")
 
 
 def tail(path, n=60, size=200_000):
@@ -273,6 +297,13 @@ def progress():
     elif any(j["status"] in ("failed", "cancelled") for j in stt["jobs"]):
         st.button("▶ Resume unfinished jobs", on_click=resume_run, args=(rd,), type="primary",
                   help="Starts the failed / cancelled jobs again. Phases that already finished are not repeated.")
+    if not LOCAL:                                            # website: the results are on the server, so offer them for download
+        for j in stt["jobs"]:
+            f = os.path.join(j["output"] or "", f"{j['name']}_merged_avg.ome.tiff")        # the final image of the job (output = its VALIS folder)
+            if j["status"] == "done" and os.path.isfile(f):
+                with open(f, "rb") as fh:
+                    st.download_button(f"⬇ Download {j['name']} ({os.path.getsize(f) / 1e9:.1f} GB)", fh,
+                                       file_name=os.path.basename(f), key=f"dl_{rid}_{j['name']}")
     names = [j["name"] for j in stt["jobs"]]
     pick = st.selectbox("Log of", range(len(names)), key=f"log_{rid}", format_func=lambda i: f"{ICON.get(stt['jobs'][i]['status'], '')} {names[i]}",
                         index=next((i for i, j in enumerate(stt["jobs"]) if j["status"] in ("running", "failed")), 0))
