@@ -15,7 +15,6 @@ import pandas as pd
 import streamlit as st
 
 import coreg_core as C
-import server_picker
 
 if not os.environ.get("UNIFIED_APP"):                 # the unified app (app.py) sets the page config once
     st.set_page_config(page_title="Coregistration", page_icon="🔬", layout="wide")
