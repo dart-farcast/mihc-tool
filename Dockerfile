@@ -19,7 +19,8 @@ RUN chmod +x /app/start.sh \
     && useradd -m app \
     && mkdir -p /data /data/uploads /runs /results \
     && chown -R app /data /runs /results
-
+# VALIS writes bf_formats.txt (and the Bio-Formats jars) into its own install folder at first start
+RUN chown -R app "$(python -c 'import valis,os;print(os.path.dirname(valis.__file__))')"
 USER app
 
 # Download the Bio-Formats jars now so the first job does not need internet. Not fatal if it fails: it then downloads on first use.
