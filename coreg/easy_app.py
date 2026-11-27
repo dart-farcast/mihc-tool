@@ -305,7 +305,10 @@ st.caption("Give the first scans (slide 1) and the second scans (slide 2) as **t
            "the explant code in the file names, e.g. LA1, LC3) or as **two slide files** (one sample). Everything is detected by itself.")
 path_input("Slide 1 - folder or file", "src1")
 path_input("Slide 2 - folder or file", "src2")
-path_input("Results folder (leave empty: next to the slides)", "outdir", folder_only=True)
+if LOCAL:
+    path_input("Results folder (leave empty: next to the slides)", "outdir", folder_only=True)
+else:
+    st.caption("Results are saved on the server next to the slides. When a job is done, a **Download** button appears under *Progress*.")
 
 found = find_samples(s.get("src1", ""), s.get("src2", ""), s.get("pair_pattern") or C.DEFAULT_PAIR_PATTERN)
 pairs = found["pairs"]
