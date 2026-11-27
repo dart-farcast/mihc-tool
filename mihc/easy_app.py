@@ -1,13 +1,56 @@
 """mIHC Easy Analysis - counts / Log2FC / Prism / % pairs / distance / proximity for a set of samples.
 Launch with `Launch Easy mIHC App.bat`.  Engine: mihc_engine.py"""
-import io, os, shutil, tempfile, zipfile
+import io, os, shutil, string, tempfile, zipfile
 import pandas as pd
 import streamlit as st
 import mihc_engine as E
 
-if not os.environ.get("UNIFIED_APP"):
+if not os.environ.get("UNIFIED_APP"):                 # the unified app (app.py) sets the page config once
     st.set_page_config(page_title="mIHC Easy Analysis", layout="wide")
 st.title("mIHC Analysis")
+
+
+def _roots():
+    if os.name == "nt":
+        return [f"{d}:{os.sep}" for d in string.ascii_uppercase if os.path.exists(f"{d}:{os.sep}")]
+    return [p for p in ("/data", "/") if os.path.isdir(p)]
+
+
+@st.dialog("Select the project folder", width="large")
+def pick_folder():
+    """In-page folder browser: lists folders of the machine that runs the app (PC or server), so it works the same in both."""
+    cur = st.session_state.get("pf_cur") or st.session_state.get("folder") or (_roots() or [os.path.expanduser("~")])[0]
+    if not os.path.isdir(cur):
+        cur = (_roots() or [os.path.expanduser("~")])[0]
+    jump = st.text_input("Jump to a path (optional)", placeholder="e.g. a network path", key="pf_jump")
+    if jump and os.path.isdir(jump) and jump != st.session_state.get("pf_last"):
+        st.session_state["pf_last"] = st.session_state["pf_cur"] = cur = jump
+    st.markdown(f"**{cur}**")
+    top = st.columns(3)
+    parent = os.path.dirname(cur.rstrip("/" + os.sep)) or cur
+    if top[0].button("Up", disabled=parent == cur, use_container_width=True):
+        st.session_state["pf_cur"] = parent
+        st.rerun(scope="fragment")
+    if os.name == "nt":
+        drive = top[1].selectbox("Drive", _roots(), index=None, placeholder="Drive...", label_visibility="collapsed")
+        if drive and drive != st.session_state.get("pf_drive"):
+            st.session_state["pf_drive"], st.session_state["pf_cur"] = drive, drive
+            st.rerun(scope="fragment")
+    try:
+        subs = sorted((e.name for e in os.scandir(cur) if e.is_dir() and not e.name.startswith((".", "$"))), key=str.lower)
+    except OSError:
+        subs = []
+        st.warning("Cannot open this folder.")
+    cols = st.columns(3)
+    for i, name in enumerate(subs[:300]):
+        if cols[i % 3].button(name, key=f"pf_{i}", use_container_width=True):
+            st.session_state["pf_cur"] = os.path.join(cur, name)
+            st.rerun(scope="fragment")
+    if len(subs) > 300:
+        st.caption(f"... {len(subs) - 300} more folders not shown; use 'Jump to a path'.")
+    if st.button("Select this folder", type="primary"):
+        st.session_state["folder"] = cur
+        st.rerun()
 
 
 @st.cache_data(show_spinner="Reading the CSV...")
@@ -70,8 +113,11 @@ def analyze():
     src = st.radio("Where are the QuPath measurement CSVs?", ["Folder (PC or server)", "Upload files"], horizontal=True)
     found, out_default = {}, ""
     if src.startswith("Folder"):
-        folder = st.text_input("Project folder - one sub-folder per sample, each holding its CSV",
-                               placeholder=r"Z:\Shravan\mIHC\Exosome study")
+        c1, c2 = st.columns([1, 5], vertical_alignment="center")
+        c1.button("Browse...", on_click=pick_folder, key="browse_btn")
+        folder = st.session_state.get("folder", "")
+        c2.text_input("Project folder - one sub-folder per sample, each holding its CSV", value=folder, disabled=True,
+                      placeholder="Click Browse... and pick the folder (on this PC or the server)")
         if folder:
             if os.path.isdir(folder):
                 with st.spinner("Looking for measurement CSVs..."):
@@ -121,28 +167,41 @@ def analyze():
 
     st.header("3 · Spatial analysis (optional)")
     pairs, prox_pairs, thr = [], [], 20.0
+    sp = E.spatial_cols(first)                              # header only: which 'distance to annotation with X' columns exist
+    ann = sp["ann"]
+    if len(sp["candidates"]) > 1:
+        ann = st.selectbox("Tumour annotation to use (zones + distance to tumour)", sp["candidates"],
+                           index=sp["candidates"].index(sp["ann"]), key="ann")
+    sp = E.spatial_cols(first, ann)
+    has_sd, has_td = bool(sp["sd"]), bool(sp["td"] or sp["sd"])
+    if ann:
+        st.caption(f"Tumour annotation: **{ann}** - signed distance {'found' if sp['sd'] else 'NOT found'}, "
+                   f"distance {'found' if sp['td'] else ('derived from the signed distance' if sp['sd'] else 'NOT found')}.")
+    else:
+        dist_cols = [c for c in sp["cols"] if "distance" in c.lower() and "detection" not in c.lower()]
+        st.caption("No 'Distance to annotation with <tumour>' column in this CSV" + (f" (only: {', '.join(dist_cols)})." if dist_cols else "."))
     if not info["has_xy"]:
         st.info("This CSV has no Centroid X/Y columns, so distance and proximity are not available.")
     else:
         st.subheader("Distance (cell-cell interaction)")
         st.caption("For every 'From' cell, the distance to the nearest 'To' cell (or to the tumour). Median per explant, then median per arm.")
-        pairs = pair_editor("pairs", names, names + (["Tumor"] if info["has_td"] else []), ("From", "To"))
+        pairs = pair_editor("pairs", names, names + (["Tumor"] if has_td else []), ("From", "To"))
         st.subheader("Proximity (cells close to another cell type)")
         thr = st.number_input("Neighbour distance threshold (µm)", 1.0, 500.0, 20.0)
         st.caption("Per zone: how many 'Source' cells have a 'Neighbour' cell within the threshold, as a count and as % of the source cells.")
-        prox_pairs = pair_editor("prox", names, names, ("Source", "Neighbour")) if info["has_sd"] else []
-        if not info["has_sd"]:
+        prox_pairs = pair_editor("prox", names, names, ("Source", "Neighbour")) if has_sd else []
+        if not has_sd:
             st.info("Proximity needs the signed distance to the tumour (for zones).")
 
     st.header("4 · Run")
     with st.expander("Advanced settings (the defaults are the lab standard)"):
         circ = st.slider("Minimum nucleus circularity (0 = off)", 0.0, 1.0, 0.7, 0.05)
-        peri = st.number_input("Peri-tumor zone: up to X µm outside the tumour", 1.0, 500.0, 50.0) if info["has_sd"] else 50.0
+        peri = st.number_input("Peri-tumor zone: up to X µm outside the tumour", 1.0, 500.0, 50.0) if has_sd else 50.0
         old_way = st.checkbox("Let a cell count as its own neighbour (reproduces the old BP016/BP018/Exosome scripts)", value=False,
                               help="Cells positive for both the source and the neighbour marker (e.g. CD8+FoxP3+) are at 0 µm from themselves. "
                                    "The old scripts counted that; the default here does not.")
-    if not info["has_sd"]:
-        st.info("No tumour distance in this CSV (no spatial annotation): the results will be counts per marker only, without In-Tumor / Peri-Tumor / TILs zones.")
+    if not has_sd:
+        st.info("No signed distance to the tumour in this CSV: counts per marker only (no In-Tumor / Peri-Tumor / TILs zones)" + (" - distance to the tumour is still available above." if has_td else "."))
 
     if st.button("Run analysis", type="primary"):
         out_dir = tempfile.mkdtemp()                     # results are only handed to the browser as downloads
@@ -151,10 +210,14 @@ def analyze():
         for k, (_, row) in enumerate(use.iterrows()):
             sid = row["Sample"]
             bar.progress(k / len(use), text=f"{sid} ({k + 1}/{len(use)})")
-            df = E.load_cells(found[sid], circ)
+            sp_i = E.spatial_cols(found[sid], ann)
+            if bool(sp_i["sd"]) != has_sd:
+                st.warning(f"{sid}: {'has no' if has_sd else 'has a'} signed distance to '{ann}' unlike the first sample - zone columns are "
+                           f"{'left blank' if has_sd else 'ignored'} for it.")
+            df = E.load_cells(found[sid], circ, ann)
             df = df[df["arm"].isin(codes)].assign(arm=lambda x: x["arm"].map(d["arm_names"]))
             cls = E.marker_classes(df["Classification"].unique(), d["rename"], markers)
-            counts = E.compute_counts(df, cls, peri)
+            counts = E.compute_counts(df, cls, peri, E.ZONES if has_sd else ["Total"])
             inter = E.compute_interactions(df, cls, pairs, not old_way) if pairs else None
             prox = E.compute_proximity(df, cls, prox_pairs, thr, peri, not old_way) if prox_pairs else None
             results[sid] = {"counts": counts, "inter": inter, "prox": prox}

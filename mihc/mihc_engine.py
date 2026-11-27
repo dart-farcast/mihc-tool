@@ -54,12 +54,33 @@ def find_samples(folder):
 
 
 # ── loading ──────────────────────────────────────────────────────────────────
-def _cols(path):
+_ANN_RE = re.compile(r'^(Signed distance|Distance) to annotation with (.+?)(?:\s+\S{1,2}m)?$')     # "... with Tumor µm"
+
+
+def spatial_cols(path, ann=None):
+    """Header-only look at the spatial columns. Annotations are whatever 'Distance to annotation with X' columns exist; the tumour
+    one is X = ann, else a name that looks like tumour/tumor, else the only non-Tissue annotation, else the first non-Tissue one.
+    Returns names (all annotations), candidates (non-Tissue), ann (chosen or None), sd / td (column names or None)."""
     cols = list(pd.read_csv(path, nrows=0).columns)
+    signed, plain = {}, {}
+    for c in cols:
+        m = _ANN_RE.match(c.strip())
+        if m:
+            (signed if m.group(1) == 'Signed distance' else plain).setdefault(m.group(2).strip(), c)
+    names = list(dict.fromkeys(list(signed) + list(plain)))
+    cand = [n for n in names if n.lower() != 'tissue']
+    if ann not in names:
+        ann = next((n for n in cand if re.search(r'tum[oa]u?r', n, re.I)), cand[0] if cand else None)
+    return {'cols': cols, 'names': names, 'candidates': cand, 'ann': ann,
+            'sd': signed.get(ann), 'td': plain.get(ann)}
+
+
+def _cols(path, ann=None):
+    s = spatial_cols(path, ann)
+    cols = s['cols']
     pick = lambda pred: next((c for c in cols if pred(c)), None)
     return {
-        'sd': pick(lambda c: c.startswith('Signed distance to annotation with Tumor')),
-        'td': pick(lambda c: c.startswith('Distance to annotation with Tumor')),
+        'sd': s['sd'], 'td': s['td'],
         'x': pick(lambda c: c.startswith('Centroid X')),
         'y': pick(lambda c: c.startswith('Centroid Y')),
         'circ': 'Nucleus: Circularity' if 'Nucleus: Circularity' in cols else None,
@@ -67,9 +88,10 @@ def _cols(path):
     }
 
 
-def load_cells(path, circ_min=0.7):
-    """Classified cells with columns: Classification, arm (LA..), explant (int), sd, td, x, y (missing ones are NaN)."""
-    c = _cols(path)
+def load_cells(path, circ_min=0.7, ann=None):
+    """Classified cells with columns: Classification, arm (LA..), explant (int), sd, td, x, y (missing ones are NaN).
+    sd = signed distance to the tumour annotation; td = distance to it (|sd| when only the signed column exists)."""
+    c = _cols(path, ann)
     use = ['Image', 'Classification'] + [v for v in c.values() if v]
     parts = []                                    # read in chunks so file size does not matter, only the classified cells are kept
     for ch in pd.read_csv(path, usecols=use, chunksize=500_000, low_memory=False):
@@ -84,13 +106,15 @@ def load_cells(path, circ_min=0.7):
     df['explant'] = df['explant'].astype(int)
     for k in ('sd', 'td', 'x', 'y'):
         df[k] = pd.to_numeric(df[c[k]], errors='coerce') if c[k] else np.nan
+    if not c['td'] and c['sd']:
+        df['td'] = df['sd'].abs()
     return df[['Classification', 'arm', 'explant', 'sd', 'td', 'x', 'y']].reset_index(drop=True)
 
 
-def detect(path):
+def detect(path, ann=None):
     """What the CSV contains, for the UI: arms, phenotype labels, which columns exist."""
-    c = _cols(path)
-    df = load_cells(path, circ_min=0)
+    c, s = _cols(path, ann), spatial_cols(path, ann)
+    df = load_cells(path, circ_min=0, ann=ann)
     cls = df['Classification'].value_counts()
     tok = {}
     for label, n in cls.items():
@@ -98,7 +122,8 @@ def detect(path):
             tok[t] = tok.get(t, 0) + n
     arms = df.groupby('arm').agg(images=('explant', 'nunique'), max_explant=('explant', 'max'))
     return {'arms': arms, 'tokens': pd.Series(tok).sort_values(ascending=False), 'labels': cls,
-            'has_sd': bool(c['sd']), 'has_td': bool(c['td']), 'has_xy': bool(c['x'] and c['y'])}
+            'has_sd': bool(c['sd']), 'has_td': bool(c['td'] or c['sd']), 'has_xy': bool(c['x'] and c['y']),
+            'annotations': s['names'], 'ann': s['ann']}
 
 
 def short_label(sample_id):
@@ -128,16 +153,18 @@ def zone_masks(df, peri=50.0):
             'Peri-Tumor': (sd > 0) & (sd <= peri), 'TILs': sd <= peri}
 
 
-def compute_counts(df, classes, peri=50.0):
+def compute_counts(df, classes, peri=50.0, zones=None):
     """Rows = (arm, explant) images that exist; columns = (marker, zone). Explants without an image stay absent (blank)."""
     present = df.groupby(['arm', 'explant']).size().index
     zm = zone_masks(df, peri)
-    zones = ZONES if df['sd'].notna().any() else ['Total']      # no spatial annotation in the CSV: counts only, no empty zones
+    has = df['sd'].notna().any()
+    zones = zones or (ZONES if has else ['Total'])               # no spatial annotation in the CSV: counts only, no empty zones
     res = {}
     for name, ok in classes.items():
         mk = df['Classification'].isin(ok)
         for z in zones:
-            res[(name, z)] = df[mk & zm[z]].groupby(['arm', 'explant']).size().reindex(present, fill_value=0)
+            res[(name, z)] = (df[mk & zm[z]].groupby(['arm', 'explant']).size().reindex(present, fill_value=0)
+                              if has or z == 'Total' else pd.Series(np.nan, index=present))   # sample without the annotation: blank, not 0
     out = pd.DataFrame(res)
     out.columns = pd.MultiIndex.from_tuples(out.columns, names=['marker', 'zone'])
     return out
