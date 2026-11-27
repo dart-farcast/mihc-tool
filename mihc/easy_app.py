@@ -70,9 +70,10 @@ def analyze():
     st.caption("Counts per zone · Log2FC · Prism export · % pairs · cell-cell distance · proximity. Five steps, top to bottom.")
     st.header("1 · Your data")
     local = server_picker.is_local()
-    opts = ["Folder on this PC", "Upload files"] if local else ["Files from my computer", "Folder on the server"]
+    opts = ["Folder on this PC", "Upload files"] if local else ["Folder on my PC", "Files from my PC"]
     src = st.radio("Where are the QuPath measurement CSVs?", opts, horizontal=True)
-    src = "Folder" if src in ("Folder on this PC", "Folder on the server") else "Upload"
+    folder_mode = src in ("Folder on this PC", "Folder on my PC")
+    src = "Folder" if local and folder_mode else "Upload"
     found, out_default = {}, ""
     if src == "Folder":
         c1, c2 = st.columns([1, 5], vertical_alignment="center")
@@ -88,12 +89,11 @@ def analyze():
                 st.error("That folder does not exist.")
             out_default = os.path.join(folder, "Results")
     else:
-        by_folder = st.toggle("Pick a whole folder (Browse opens the folder window; all its CSVs are uploaded)", value=True)
-        # Streamlit's uploader only picks files; this turns its Browse button into a folder chooser (same page, so the script may reach it)
+        # Streamlit's uploader only picks files; this turns its Browse button into the PC's folder window (same page, so the script may reach it)
         components.html("<script>const f=()=>{for(const i of parent.document.querySelectorAll('input[type=file]'))"
                         "{i.webkitdirectory=%s;}};f();new MutationObserver(f).observe(parent.document.body,{childList:true,subtree:true});</script>"
-                        % ("true" if by_folder else "false"), height=0)
-        ups = st.file_uploader("Measurement CSVs (one per sample) - Browse opens a window on your computer", type="csv", accept_multiple_files=True)
+                        % ("true" if folder_mode else "false"), height=0)
+        ups = st.file_uploader(("Click Browse files and choose the folder on your PC - its CSVs are uploaded" if folder_mode else "Click Browse files and select the CSVs on your PC"), type="csv", accept_multiple_files=True)
         tmpdir = st.session_state.setdefault("tmpdir", tempfile.mkdtemp())
         for u in ups or []:
             p = os.path.join(tmpdir, u.name)
