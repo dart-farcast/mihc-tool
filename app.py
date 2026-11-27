@@ -16,8 +16,8 @@ st.set_page_config(page_title="mIHC & Coregistration Suite", page_icon="🔬", l
 
 pg = st.navigation(
     [
-        st.Page(os.path.join(ROOT_DIR, "mihc", "easy_app.py"), title="mIHC Analysis", icon="📊", default=True),
-        st.Page(os.path.join(ROOT_DIR, "coreg", "easy_app.py"), title="Coregistration", icon="🔬"),
+        st.Page(os.path.join(ROOT_DIR, "mihc", "easy_app.py"), title="mIHC Analysis", icon="📊", url_path="mihc", default=True),
+        st.Page(os.path.join(ROOT_DIR, "coreg", "easy_app.py"), title="Coregistration", icon="🔬", url_path="coreg"),
     ]
 )
 pg.run()
