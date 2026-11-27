@@ -1,56 +1,14 @@
 """mIHC Easy Analysis - counts / Log2FC / Prism / % pairs / distance / proximity for a set of samples.
 Launch with `Launch Easy mIHC App.bat`.  Engine: mihc_engine.py"""
-import io, os, shutil, string, tempfile, zipfile
+import io, os, shutil, tempfile, zipfile
 import pandas as pd
 import streamlit as st
 import mihc_engine as E
+import server_picker
 
 if not os.environ.get("UNIFIED_APP"):                 # the unified app (app.py) sets the page config once
     st.set_page_config(page_title="mIHC Easy Analysis", layout="wide")
 st.title("mIHC Analysis")
-
-
-def _roots():
-    if os.name == "nt":
-        return [f"{d}:{os.sep}" for d in string.ascii_uppercase if os.path.exists(f"{d}:{os.sep}")]
-    return [p for p in ("/data", "/") if os.path.isdir(p)]
-
-
-@st.dialog("Select the project folder", width="large")
-def pick_folder():
-    """In-page folder browser: lists folders of the machine that runs the app (PC or server), so it works the same in both."""
-    cur = st.session_state.get("pf_cur") or st.session_state.get("folder") or (_roots() or [os.path.expanduser("~")])[0]
-    if not os.path.isdir(cur):
-        cur = (_roots() or [os.path.expanduser("~")])[0]
-    jump = st.text_input("Jump to a path (optional)", placeholder="e.g. a network path", key="pf_jump")
-    if jump and os.path.isdir(jump) and jump != st.session_state.get("pf_last"):
-        st.session_state["pf_last"] = st.session_state["pf_cur"] = cur = jump
-    st.markdown(f"**{cur}**")
-    top = st.columns(3)
-    parent = os.path.dirname(cur.rstrip("/" + os.sep)) or cur
-    if top[0].button("Up", disabled=parent == cur, use_container_width=True):
-        st.session_state["pf_cur"] = parent
-        st.rerun(scope="fragment")
-    if os.name == "nt":
-        drive = top[1].selectbox("Drive", _roots(), index=None, placeholder="Drive...", label_visibility="collapsed")
-        if drive and drive != st.session_state.get("pf_drive"):
-            st.session_state["pf_drive"], st.session_state["pf_cur"] = drive, drive
-            st.rerun(scope="fragment")
-    try:
-        subs = sorted((e.name for e in os.scandir(cur) if e.is_dir() and not e.name.startswith((".", "$"))), key=str.lower)
-    except OSError:
-        subs = []
-        st.warning("Cannot open this folder.")
-    cols = st.columns(3)
-    for i, name in enumerate(subs[:300]):
-        if cols[i % 3].button(name, key=f"pf_{i}", use_container_width=True):
-            st.session_state["pf_cur"] = os.path.join(cur, name)
-            st.rerun(scope="fragment")
-    if len(subs) > 300:
-        st.caption(f"... {len(subs) - 300} more folders not shown; use 'Jump to a path'.")
-    if st.button("Select this folder", type="primary"):
-        st.session_state["folder"] = cur
-        st.rerun()
 
 
 @st.cache_data(show_spinner="Reading the CSV...")
@@ -114,7 +72,7 @@ def analyze():
     found, out_default = {}, ""
     if src.startswith("Folder"):
         c1, c2 = st.columns([1, 5], vertical_alignment="center")
-        c1.button("Browse...", on_click=pick_folder, key="browse_btn")
+        c1.button("Browse...", on_click=server_picker.pick, args=("folder", "dir", "Select the project folder"), key="browse_btn")
         folder = st.session_state.get("folder", "")
         c2.text_input("Project folder - one sub-folder per sample, each holding its CSV", value=folder, disabled=True,
                       placeholder="Click Browse... and pick the folder (on this PC or the server)")

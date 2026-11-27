@@ -12,8 +12,9 @@ import pandas as pd
 import streamlit as st
 
 import coreg_core as C
+import server_picker
 
-if not os.environ.get("UNIFIED_APP"):
+if not os.environ.get("UNIFIED_APP"):                 # the unified app (app.py) sets the page config once
     st.set_page_config(page_title="Coregistration", page_icon="🔬", layout="wide")
 RUNS = C.runs_dir()
 ICON = {"queued": "⏳", "running": "🔄", "done": "✅", "failed": "❌", "cancelled": "⏹"}
@@ -116,10 +117,14 @@ def stop_run(rd):
 def path_input(label, key, folder_only=False):
     c = st.columns([8, 1.2, 1.2], vertical_alignment="bottom")
     c[0].text_input(label, key=key)
-    tip = None if LOCAL else "Browse only works when you open the page on the PC that runs it - paste the path instead."
-    c[1].button("Folder", key=f"bf_{key}", on_click=browse, args=(key, "dir", label), disabled=not LOCAL, help=tip)
-    if not folder_only:
-        c[2].button("File", key=f"bi_{key}", on_click=browse, args=(key, "file", label), disabled=not LOCAL, help=tip)
+    if LOCAL:                                         # on the PC that runs the app: the normal Windows dialog
+        c[1].button("Folder", key=f"bf_{key}", on_click=browse, args=(key, "dir", label))
+        if not folder_only:
+            c[2].button("File", key=f"bi_{key}", on_click=browse, args=(key, "file", label))
+    else:                                             # server / Docker: browse the server's folders inside the page
+        c[1].button("Folder", key=f"bf_{key}", on_click=server_picker.pick, args=(key, "dir", label))
+        if not folder_only:
+            c[2].button("File", key=f"bi_{key}", on_click=server_picker.pick, args=(key, "file", label, C.SLIDE_EXTS))
 
 
 def tail(path, n=60, size=200_000):
